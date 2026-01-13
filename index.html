@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, serverTimestamp, increment, getDoc } from 'firebase/firestore';
 import { 
   Trophy, User, Coins, ArrowLeft, CheckCircle2, XCircle, 
@@ -8,8 +8,10 @@ import {
   Languages, BarChart3, Search, Play, Timer, Save, Edit, RefreshCw, AlertTriangle
 } from 'lucide-react';
 
-// --- 1. Firebase Configuration ---
-const firebaseConfig = {
+// --- 1. Firebase Configuration (Fix applied) ---
+// 優先使用環境變數 __firebase_config 以確保在預覽環境能運作
+// 如果環境變數不存在（例如在您自己的伺服器），則使用您提供的配置
+const userFirebaseConfig = {
   apiKey: "AIzaSyA2jtWJjlJ7Bnyfkw2oQQar210zHxsX6k0",
   authDomain: "p3-math-game.firebaseapp.com",
   projectId: "p3-math-game",
@@ -18,10 +20,12 @@ const firebaseConfig = {
   appId: "1:330710509952:web:99966ad83282621c497965"
 };
 
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : userFirebaseConfig;
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'p3-math-finance-v4-accum'; // Updated App ID for V4
+const appId = 'p3-math-finance-v4-accum'; 
 
 // --- 2. Constants ---
 const TEACHER_PWD = "26754411!";
@@ -262,7 +266,11 @@ const App = () => {
   useEffect(() => {
     const init = async () => {
       try {
-        await signInAnonymously(auth);
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
       } catch (err) {
         console.error("Auth Failed:", err);
       }
