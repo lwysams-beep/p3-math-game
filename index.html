@@ -8,8 +8,8 @@ import {
   Languages, BarChart3, Search, Play, Timer, Save, Edit, RefreshCw, AlertTriangle
 } from 'lucide-react';
 
-// --- 1. Firebase Configuration (Fix applied) ---
-// 優先使用環境變數 __firebase_config 以確保在預覽環境能運作
+// --- 1. Firebase Configuration ---
+// 優先使用環境變數 __firebase_config 以確保在預覽環境能運作 (解決 Permissions Error)
 // 如果環境變數不存在（例如在您自己的伺服器），則使用您提供的配置
 const userFirebaseConfig = {
   apiKey: "AIzaSyA2jtWJjlJ7Bnyfkw2oQQar210zHxsX6k0",
@@ -25,7 +25,9 @@ const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__f
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'p3-math-finance-v4-accum'; 
+
+// FIX: 使用環境提供的 __app_id，否則會導致 Permission Denied
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'p3-math-finance-v4-accum'; 
 
 // --- 2. Constants ---
 const TEACHER_PWD = "26754411!";
@@ -231,9 +233,9 @@ const App = () => {
   const [answer, setAnswer] = useState('');
   const [feedback, setFeedback] = useState(null);
   const [gameActive, setGameActive] = useState(false);
-  const [strikes, setStrikes] = useState(0); // Track wrong attempts per question
-  const [sessionScore, setSessionScore] = useState(0); // Score for this session
-  const [totalAccumulatedScore, setTotalAccumulatedScore] = useState(0); // From DB
+  const [strikes, setStrikes] = useState(0); 
+  const [sessionScore, setSessionScore] = useState(0); 
+  const [totalAccumulatedScore, setTotalAccumulatedScore] = useState(0); 
 
   // Teacher State
   const [teacherPwd, setTeacherPwd] = useState('');
@@ -262,7 +264,7 @@ const App = () => {
     return map;
   }, [allStudents]);
 
-  // Auth: Use Anonymous Sign-In ONLY (Robust)
+  // Auth (Fix Applied: Check initial token)
   useEffect(() => {
     const init = async () => {
       try {
@@ -291,13 +293,15 @@ const App = () => {
     return () => clearInterval(timer);
   }, [gameActive, timeLeft]);
 
-  // Teacher Monitor
+  // Teacher Monitor (Fix: Error handling in snapshot)
   useEffect(() => {
     if (!user || view !== 'teacher') return;
     const q = collection(db, 'artifacts', appId, 'public', 'data', 'scores');
     const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setLiveData(data.sort((a, b) => b.score - a.score));
+    }, (error) => {
+      console.error("Monitor Error:", error);
     });
     return () => unsub();
   }, [user, view]);
@@ -305,24 +309,24 @@ const App = () => {
   // --- Logic ---
 
   const startGame = async () => {
+    if (!user || !currentStudent) return; // Guard
     setGameActive(true);
     setSessionScore(0);
     setStrikes(0);
     setTimeLeft(GAME_DURATION);
     setCurrentQuestion(generateQuestion(difficulty));
     
-    // Init Cloud Record: Fetch existing score to accumulate
-    if(user && currentStudent) {
-      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'scores', currentStudent.id);
+    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'scores', currentStudent.id);
+    
+    try {
       const snap = await getDoc(docRef);
       let prevScore = 0;
       if (snap.exists()) {
         prevScore = snap.data().score || 0;
       }
-      setTotalAccumulatedScore(prevScore); // Local tracking for display
+      setTotalAccumulatedScore(prevScore); 
 
-      // Ensure doc exists
-      setDoc(docRef, {
+      await setDoc(docRef, {
         name: currentStudent.name_zh,
         name_en: currentStudent.name_en,
         class: currentStudent.class,
@@ -331,6 +335,8 @@ const App = () => {
         redeemed: snap.exists() ? snap.data().redeemed : false,
         timestamp: serverTimestamp()
       }, { merge: true });
+    } catch (e) {
+      console.error("Start Game Error:", e);
     }
   };
 
@@ -340,20 +346,17 @@ const App = () => {
     const correct = parseFloat(answer) === currentQuestion.a;
     
     if (correct) {
-      // Correct!
       const gained = currentQuestion.score;
       setSessionScore(s => s + gained);
-      setTotalAccumulatedScore(s => s + gained); // Optimistic UI update
+      setTotalAccumulatedScore(s => s + gained); 
       setFeedback({ ok: true, msg: `答對了！+${gained} 分` });
       
-      // Update Cloud Incrementally
       if(user && currentStudent) {
         updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'scores', currentStudent.id), { 
           score: increment(gained) 
         });
       }
       
-      // Next Question
       setTimeout(() => {
         setFeedback(null);
         setAnswer('');
@@ -362,18 +365,16 @@ const App = () => {
       }, 800);
 
     } else {
-      // Wrong!
       const newStrikes = strikes + 1;
       setStrikes(newStrikes);
 
       if (newStrikes < 3) {
         setFeedback({ ok: false, msg: `答錯了！還有 ${3 - newStrikes} 次機會` });
-        setAnswer(''); // Clear input for retry
+        setAnswer(''); 
         setTimeout(() => setFeedback(null), 1000);
       } else {
-        // 3 Strikes: Penalty
         const penalty = currentQuestion.penalty;
-        setSessionScore(s => s - penalty); // Allow negative session score? logicwise yes, total score protected?
+        setSessionScore(s => s - penalty); 
         setTotalAccumulatedScore(s => Math.max(0, s - penalty));
         setFeedback({ ok: false, msg: `3次錯誤！扣 ${penalty} 分。答案是 ${currentQuestion.a}` });
         
@@ -383,7 +384,6 @@ const App = () => {
           });
         }
 
-        // Force Next Question
         setTimeout(() => {
           setFeedback(null);
           setAnswer('');
