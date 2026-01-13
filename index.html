@@ -1,15 +1,14 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, serverTimestamp, increment } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, serverTimestamp, increment, getDoc } from 'firebase/firestore';
 import { 
   Trophy, User, Coins, ArrowLeft, CheckCircle2, XCircle, 
   Calculator, Store, Wallet, Lock, Settings, LogOut, 
-  ChevronRight, Languages, BadgeDollarSign, BarChart3, Search, RefreshCw,
-  Edit, Save, Timer, AlertTriangle, Play
+  Languages, BarChart3, Search, Play, Timer, Save, Edit, RefreshCw, AlertTriangle
 } from 'lucide-react';
 
-// --- 1. Firebase Configuration (User Provided) ---
+// --- 1. Firebase Configuration ---
 const firebaseConfig = {
   apiKey: "AIzaSyA2jtWJjlJ7Bnyfkw2oQQar210zHxsX6k0",
   authDomain: "p3-math-game.firebaseapp.com",
@@ -19,33 +18,33 @@ const firebaseConfig = {
   appId: "1:330710509952:web:99966ad83282621c497965"
 };
 
-// --- 2. Initialize Firebase (CRITICAL: auth & db MUST be defined) ---
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'p3-math-finance-v3';
+const appId = 'p3-math-finance-v4-accum'; // Updated App ID for V4
 
-// --- 3. Constants & Settings ---
+// --- 2. Constants ---
 const TEACHER_PWD = "26754411!";
 const NET_PWD = "english_please";
-const GAME_DURATION = 180; // 3 Minutes
+const GAME_DURATION = 300; // 5 Minutes (300s)
 
-// Shop Definitions
 const SHOPS = [
-  { id: 'A', name_zh: 'A店 (快樂找換)', name_en: 'Shop A (Happy Exchange)', rate: 2, color: 'bg-emerald-600', icon: 'green' },
-  { id: 'B', name_zh: 'B店 (幸運找換)', name_en: 'Shop B (Lucky Exchange)', rate: 3, color: 'bg-blue-600', icon: 'blue' },
-  { id: 'C', name_zh: 'C店 (VIP找換)',   name_en: 'Shop C (VIP Exchange)',   rate: 5, color: 'bg-purple-600', icon: 'purple' }
+  { id: 'A', name_zh: 'A店 (快樂找換)', name_en: 'Shop A', rate: 2, color: 'bg-emerald-600' },
+  { id: 'B', name_zh: 'B店 (幸運找換)', name_en: 'Shop B', rate: 3, color: 'bg-blue-600' },
+  { id: 'C', name_zh: 'C店 (VIP找換)',   name_en: 'Shop C',   rate: 5, color: 'bg-purple-600' }
 ];
 
-// --- 4. Question Generator (Based on PDFs) ---
+// --- 3. Smart Question Generator (Dynamic) ---
 const generateQuestion = (difficulty) => {
-  const types = ['mul', 'div', 'app'];
-  const type = types[Math.floor(Math.random() * types.length)];
-  let q = "", a = 0, score = 0;
+  const types = ['mul', 'div', 'app', 'logic'];
+  // Weighting: High difficulty has more logic/mul questions
+  const type = types[Math.floor(Math.random() * (difficulty === 'high' ? 4 : 3))]; 
+  
+  let q = "", a = 0, score = 0, penalty = 0;
 
-  // Level 1: Low (Basic 2-digit Mul/Div)
+  // --- LOW (Score: 5, Penalty: -2) ---
   if (difficulty === 'low') {
-    score = 5;
+    score = 5; penalty = 2;
     if (type === 'mul') {
       const n1 = Math.floor(Math.random() * 80) + 10; // 10-89
       const n2 = Math.floor(Math.random() * 8) + 2;   // 2-9
@@ -57,55 +56,62 @@ const generateQuestion = (difficulty) => {
       q = `${ans * n2} ÷ ${n2} = ?`;
       a = ans;
     } else {
-      const p = Math.floor(Math.random() * 10) + 5;
+      const items = ['蘋果', '擦膠', '糖果', '鉛筆'];
+      const item = items[Math.floor(Math.random() * items.length)];
+      const p = Math.floor(Math.random() * 10) + 2;
       const c = Math.floor(Math.random() * 5) + 2;
-      q = `每支鉛筆 $${p}，買 ${c} 支需付多少元？`;
+      q = `每個${item}售 $${p}，買 ${c} 個需付多少元？`;
       a = p * c;
     }
   } 
-  // Level 2: Mid (3-digit Mul, Estimation)
+  // --- MID (Score: 10, Penalty: -5) ---
   else if (difficulty === 'mid') {
-    score = 10;
+    score = 10; penalty = 5;
     if (type === 'mul') {
-      const n1 = Math.floor(Math.random() * 200) + 100; // 100-299
-      const n2 = Math.floor(Math.random() * 6) + 2;
+      const n1 = Math.floor(Math.random() * 300) + 100; // 100-399
+      const n2 = Math.floor(Math.random() * 8) + 2;
       q = `${n1} × ${n2} = ?`;
       a = n1 * n2;
     } else if (type === 'div') {
+      // 簡單應用: 平均分
       const ans = Math.floor(Math.random() * 20) + 10;
-      const n2 = Math.floor(Math.random() * 5) + 2;
-      q = `${ans * n2} ÷ ${n2} = ?`;
+      const n2 = Math.floor(Math.random() * 6) + 3;
+      q = `將 ${ans * n2} 粒糖果平均分給 ${n2} 人，每人得多少粒？`;
       a = ans;
     } else {
-      const p = Math.floor(Math.random() * 50) + 20;
-      const c = 4;
-      q = `午餐每份 $${p}，4 人共需付多少元？`;
-      a = p * c;
+      // 估算 (Multiply-1.pdf)
+      const n1 = Math.floor(Math.random() * 10) + 80; // 80-89
+      const n2 = Math.floor(Math.random() * 3) + 7;   // 7-9
+      q = `估算：${n1} × ${n2} 的結果約是多少？(取百位整數)`;
+      a = Math.round((n1 * n2) / 100) * 100;
     }
   } 
-  // Level 3: High (Logic, Multi-step, Complex Mul)
+  // --- HIGH (Score: 20, Penalty: -10) ---
   else {
-    score = 20;
+    score = 20; penalty = 10;
     if (type === 'mul') {
-      const n1 = Math.floor(Math.random() * 8) + 2;
-      const n2 = Math.floor(Math.random() * 10) + 10;
+      // 連乘 A x B x C (Multiply-3-1.pdf)
+      const n1 = Math.floor(Math.random() * 5) + 2;
+      const n2 = Math.floor(Math.random() * 20) + 10;
       const n3 = Math.floor(Math.random() * 5) + 2;
       q = `${n1} × ${n2} × ${n3} = ?`;
       a = n1 * n2 * n3;
-    } else if (type === 'div') {
-      const ans = Math.floor(Math.random() * 50) + 20;
-      const n2 = Math.floor(Math.random() * 8) + 2;
-      q = `${ans * n2} ÷ ${n2} = ?`;
-      a = ans;
+    } else if (type === 'logic') {
+      // 邏輯 (Multiply-2.pdf)
+      q = "用 5, 4, 0 組成最大的三位單數，再乘以 3，結果是？";
+      // Max Odd with 5,4,0 is 405 (ends in 5)
+      a = 405 * 3; 
     } else {
-      q = "用 5, 4, 0 組成最大的三位數，再乘以 3，結果是？";
-      a = 540 * 3;
+      // 複雜應用
+      const fee = 106;
+      q = `電腦班每堂 $${fee}，全期 8 堂。子言和妹妹一同報名，共需付多少元？`;
+      a = fee * 8 * 2;
     }
   }
-  return { q, a, score, difficulty };
+  return { q, a, score, penalty, difficulty };
 };
 
-// --- 5. Student Data (CSV) ---
+// CSV Data 
 const RAW_CSV_DATA = `學生註冊編號,學年,級別,班別代碼,25_P3_Class,25_P3_Class 英數,25_託管,班號,學生編號,英文姓名,中文姓名
 #W23083,2025,P3,3A,3A,3A,,1,S9014979,CHAN SHEUNG KI,陳尚頎
 #W23126,2025,P3,3A,3A,3A,,2,S9198301,CHU HOI TUNG,朱凱彤
@@ -166,7 +172,7 @@ const RAW_CSV_DATA = `學生註冊編號,學年,級別,班別代碼,25_P3_Class,
 #W23132,2025,P3,3C,3C,3C,,7,S9231457,KWOK KWAN LAM,郭君臨
 #W23009,2025,P3,3C,3C,3C,,8,S9029951,KWONG TSZ KIU,鄺芷蕎
 #W23031,2025,P3,3C,3C,3C,,9,S9014545,LAU TIN LONG,劉天朗
-#W23033,2025,P3,3C,3C,3C,,10,S9011716,LAW CHUN CHING,羅俊政
+#W23033,2025,P3,3C,3C,3C,,10,S9011708,LAW CHUN CHING,羅俊政
 #W23035,2025,P3,3C,3C,3C,,11,S9024087,LEE HOI CHING,李海晴
 #W23037,2025,P3,3C,3C,3C,,12,S9029941,LEE TSZ LAM,李芷琳
 #W23039,2025,P3,3C,3C,3C,,13,S9035097,LI CHEUK HEI,李卓熹
@@ -215,11 +221,15 @@ const App = () => {
   const [currentStudent, setCurrentStudent] = useState(null);
   const [difficulty, setDifficulty] = useState('low');
   const [currentQuestion, setCurrentQuestion] = useState(null);
-  const [score, setScore] = useState(0);
+  
+  // Game State
   const [timeLeft, setTimeLeft] = useState(GAME_DURATION);
   const [answer, setAnswer] = useState('');
   const [feedback, setFeedback] = useState(null);
   const [gameActive, setGameActive] = useState(false);
+  const [strikes, setStrikes] = useState(0); // Track wrong attempts per question
+  const [sessionScore, setSessionScore] = useState(0); // Score for this session
+  const [totalAccumulatedScore, setTotalAccumulatedScore] = useState(0); // From DB
 
   // Teacher State
   const [teacherPwd, setTeacherPwd] = useState('');
@@ -248,13 +258,13 @@ const App = () => {
     return map;
   }, [allStudents]);
 
-  // Auth
+  // Auth: Use Anonymous Sign-In ONLY (Robust)
   useEffect(() => {
     const init = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
+      try {
         await signInAnonymously(auth);
+      } catch (err) {
+        console.error("Auth Failed:", err);
       }
       setLoading(false);
     };
@@ -286,21 +296,33 @@ const App = () => {
 
   // --- Logic ---
 
-  const startGame = () => {
+  const startGame = async () => {
     setGameActive(true);
-    setScore(0);
+    setSessionScore(0);
+    setStrikes(0);
     setTimeLeft(GAME_DURATION);
     setCurrentQuestion(generateQuestion(difficulty));
+    
+    // Init Cloud Record: Fetch existing score to accumulate
     if(user && currentStudent) {
-      setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'scores', currentStudent.id), {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'scores', currentStudent.id);
+      const snap = await getDoc(docRef);
+      let prevScore = 0;
+      if (snap.exists()) {
+        prevScore = snap.data().score || 0;
+      }
+      setTotalAccumulatedScore(prevScore); // Local tracking for display
+
+      // Ensure doc exists
+      setDoc(docRef, {
         name: currentStudent.name_zh,
         name_en: currentStudent.name_en,
         class: currentStudent.class,
-        score: 0,
         status: 'playing',
-        redeemed: false,
+        score: prevScore, // Keep existing score
+        redeemed: snap.exists() ? snap.data().redeemed : false,
         timestamp: serverTimestamp()
-      });
+      }, { merge: true });
     }
   };
 
@@ -308,21 +330,60 @@ const App = () => {
     e.preventDefault();
     if (!gameActive) return;
     const correct = parseFloat(answer) === currentQuestion.a;
+    
     if (correct) {
-      const newScore = score + currentQuestion.score;
-      setScore(newScore);
-      setFeedback({ ok: true, msg: 'Correct!' });
+      // Correct!
+      const gained = currentQuestion.score;
+      setSessionScore(s => s + gained);
+      setTotalAccumulatedScore(s => s + gained); // Optimistic UI update
+      setFeedback({ ok: true, msg: `答對了！+${gained} 分` });
+      
+      // Update Cloud Incrementally
       if(user && currentStudent) {
-        updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'scores', currentStudent.id), { score: newScore });
+        updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'scores', currentStudent.id), { 
+          score: increment(gained) 
+        });
       }
+      
+      // Next Question
+      setTimeout(() => {
+        setFeedback(null);
+        setAnswer('');
+        setStrikes(0);
+        setCurrentQuestion(generateQuestion(difficulty));
+      }, 800);
+
     } else {
-      setFeedback({ ok: false, msg: `Wrong! Answer: ${currentQuestion.a}` });
+      // Wrong!
+      const newStrikes = strikes + 1;
+      setStrikes(newStrikes);
+
+      if (newStrikes < 3) {
+        setFeedback({ ok: false, msg: `答錯了！還有 ${3 - newStrikes} 次機會` });
+        setAnswer(''); // Clear input for retry
+        setTimeout(() => setFeedback(null), 1000);
+      } else {
+        // 3 Strikes: Penalty
+        const penalty = currentQuestion.penalty;
+        setSessionScore(s => s - penalty); // Allow negative session score? logicwise yes, total score protected?
+        setTotalAccumulatedScore(s => Math.max(0, s - penalty));
+        setFeedback({ ok: false, msg: `3次錯誤！扣 ${penalty} 分。答案是 ${currentQuestion.a}` });
+        
+        if(user && currentStudent) {
+          updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'scores', currentStudent.id), { 
+            score: increment(-penalty) 
+          });
+        }
+
+        // Force Next Question
+        setTimeout(() => {
+          setFeedback(null);
+          setAnswer('');
+          setStrikes(0);
+          setCurrentQuestion(generateQuestion(difficulty));
+        }, 1500);
+      }
     }
-    setTimeout(() => {
-      setFeedback(null);
-      setAnswer('');
-      setCurrentQuestion(generateQuestion(difficulty));
-    }, 800);
   };
 
   const endGame = () => {
@@ -353,15 +414,15 @@ const App = () => {
     <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center space-y-8 p-4">
       <div className="text-center">
         <Coins size={80} className="text-orange-500 mx-auto animate-bounce mb-4"/>
-        <h1 className="text-5xl font-black text-slate-800">P.3 理財數學王 v3.0</h1>
-        <p className="text-xl text-slate-500 font-bold">Smart Finance Math King</p>
+        <h1 className="text-5xl font-black text-slate-800">P.3 理財數學王 v4.0</h1>
+        <p className="text-xl text-slate-500 font-bold">5分鐘限時挑戰 • 累積財富</p>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl">
         <button onClick={() => setView('student')} className="p-8 bg-white rounded-3xl shadow-xl border-b-8 border-orange-200 hover:scale-105 transition-all text-center group">
-          <User size={48} className="mx-auto text-orange-500 mb-2 group-hover:scale-110 transition-transform"/><h2 className="text-2xl font-black text-slate-700">Student</h2>
+          <User size={48} className="mx-auto text-orange-500 mb-2 group-hover:scale-110 transition-transform"/><h2 className="text-2xl font-black text-slate-700">我是學生</h2>
         </button>
         <button onClick={() => setView('teacher_login')} className="p-8 bg-white rounded-3xl shadow-xl border-b-8 border-indigo-200 hover:scale-105 transition-all text-center group">
-          <BarChart3 size={48} className="mx-auto text-indigo-500 mb-2 group-hover:scale-110 transition-transform"/><h2 className="text-2xl font-black text-slate-700">Teacher</h2>
+          <BarChart3 size={48} className="mx-auto text-indigo-500 mb-2 group-hover:scale-110 transition-transform"/><h2 className="text-2xl font-black text-slate-700">我是老師</h2>
         </button>
         <button onClick={() => setView('net_login')} className="p-8 bg-white rounded-3xl shadow-xl border-b-8 border-purple-200 hover:scale-105 transition-all text-center group">
           <Languages size={48} className="mx-auto text-purple-500 mb-2 group-hover:scale-110 transition-transform"/><h2 className="text-2xl font-black text-slate-700">NET Teacher</h2>
@@ -396,16 +457,22 @@ const App = () => {
           )}
           {studentView === 'difficulty' && (
             <div className="space-y-4 text-center">
-              <h3 className="text-2xl font-black">Select Difficulty</h3>
-              <button onClick={() => {setDifficulty('low'); setStudentView('intro');}} className="w-full p-6 bg-green-100 border-2 border-green-300 rounded-2xl text-xl font-black text-green-800">Low (5 Coins)</button>
-              <button onClick={() => {setDifficulty('mid'); setStudentView('intro');}} className="w-full p-6 bg-blue-100 border-2 border-blue-300 rounded-2xl text-xl font-black text-blue-800">Mid (10 Coins)</button>
-              <button onClick={() => {setDifficulty('high'); setStudentView('intro');}} className="w-full p-6 bg-purple-100 border-2 border-purple-300 rounded-2xl text-xl font-black text-purple-800">High (20 Coins)</button>
+              <h3 className="text-2xl font-black">選擇挑戰難度</h3>
+              <button onClick={() => {setDifficulty('low'); setStudentView('intro');}} className="w-full p-6 bg-green-100 border-2 border-green-300 rounded-2xl text-xl font-black text-green-800">
+                初級 (Low)<br/><span className="text-sm font-bold">每題 5 分 (扣 2 分)</span>
+              </button>
+              <button onClick={() => {setDifficulty('mid'); setStudentView('intro');}} className="w-full p-6 bg-blue-100 border-2 border-blue-300 rounded-2xl text-xl font-black text-blue-800">
+                中級 (Mid)<br/><span className="text-sm font-bold">每題 10 分 (扣 5 分)</span>
+              </button>
+              <button onClick={() => {setDifficulty('high'); setStudentView('intro');}} className="w-full p-6 bg-purple-100 border-2 border-purple-300 rounded-2xl text-xl font-black text-purple-800">
+                高級 (High)<br/><span className="text-sm font-bold">每題 20 分 (扣 10 分)</span>
+              </button>
             </div>
           )}
           {studentView === 'intro' && (
             <div className="text-center py-10 space-y-6">
               <h2 className="text-4xl font-black">Ready?</h2>
-              <p className="text-xl">3 Minutes Limit!</p>
+              <p className="text-xl font-bold">5 分鐘限時挑戰！<br/>答錯 3 次會扣分喔！</p>
               <button onClick={() => {setStudentView('play'); startGame();}} className="px-10 py-4 bg-orange-500 text-white rounded-full text-2xl font-black animate-pulse shadow-xl hover:scale-105 transition-transform"><Play fill="currentColor" className="inline mr-2"/> START</button>
             </div>
           )}
@@ -413,12 +480,17 @@ const App = () => {
             <div className="space-y-6">
               <div className="flex justify-between items-center bg-slate-100 p-3 rounded-xl">
                 <div className="flex items-center gap-2 text-rose-600 font-black text-xl"><Timer/> {Math.floor(timeLeft/60)}:{String(timeLeft%60).padStart(2,'0')}</div>
-                <div className="flex items-center gap-2 text-orange-500 font-black text-xl"><Coins/> {score}</div>
+                <div className="flex items-center gap-2 text-orange-500 font-black text-xl"><Coins/> {totalAccumulatedScore}</div>
               </div>
-              <div className="bg-white border-4 border-slate-100 p-8 rounded-3xl min-h-[180px] flex items-center justify-center text-center">
+              
+              {/* Question Area */}
+              <div className="bg-white border-4 border-slate-100 p-8 rounded-3xl min-h-[180px] flex flex-col items-center justify-center text-center relative">
+                {strikes > 0 && <span className="absolute top-2 right-2 text-red-500 font-bold bg-red-100 px-2 rounded-lg text-xs">錯誤: {strikes}/3</span>}
                 <p className="text-3xl font-bold text-slate-800">{currentQuestion.q}</p>
               </div>
+
               {feedback && <div className={`p-4 rounded-xl text-center font-black text-xl ${feedback.ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{feedback.msg}</div>}
+              
               <form onSubmit={submitAnswer} className="flex gap-2">
                 <input type="number" autoFocus value={answer} onChange={e => setAnswer(e.target.value)} className="flex-1 p-4 rounded-2xl border-4 border-slate-200 text-3xl font-black text-center outline-none" />
                 <button type="submit" className="bg-slate-800 text-white px-6 rounded-2xl font-black text-xl">GO</button>
@@ -428,10 +500,16 @@ const App = () => {
           {studentView === 'result' && (
             <div className="text-center py-10 space-y-6 animate-in zoom-in">
               <Trophy size={80} className="text-yellow-400 mx-auto"/>
-              <h2 className="text-4xl font-black">Time's Up!</h2>
-              <div className="p-6 bg-orange-50 rounded-3xl border-2 border-orange-100">
-                <p className="text-slate-500 font-bold">Total Coins</p>
-                <p className="text-7xl font-black text-orange-600">{score}</p>
+              <h2 className="text-4xl font-black">時間到！</h2>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-slate-50 rounded-2xl border">
+                  <p className="text-xs text-slate-400 font-bold">本局得分</p>
+                  <p className="text-3xl font-black text-slate-700">{sessionScore}</p>
+                </div>
+                <div className="p-4 bg-orange-50 rounded-2xl border-2 border-orange-200">
+                  <p className="text-xs text-orange-400 font-bold">累積總分</p>
+                  <p className="text-3xl font-black text-orange-600">{totalAccumulatedScore}</p>
+                </div>
               </div>
               <p className="font-bold text-slate-400">Go to Exchange Shop!</p>
               <button onClick={() => setView('home')} className="text-slate-400 font-bold underline">Back Home</button>
@@ -458,7 +536,7 @@ const App = () => {
     <div className="min-h-screen bg-slate-50 p-4">
       <div className="max-w-xl mx-auto bg-white rounded-[2rem] shadow-xl border-b-8 border-purple-200 min-h-[800px]">
         <div className="bg-purple-600 p-6 text-white flex justify-between items-center">
-          <h2 className="font-bold text-lg">NET Exchange Station</h2>
+          <h2 className="font-bold text-lg">NET Exchange</h2>
           <button onClick={() => setView('home')}><LogOut/></button>
         </div>
         <div className="p-6 space-y-6">
@@ -487,7 +565,13 @@ const App = () => {
                     <p className="text-4xl font-black text-purple-600">{netStudent.score}</p>
                   </div>
                 </div>
-                {netStudent.redeemed && <div className="mt-4 bg-green-100 text-green-700 p-3 rounded-xl flex items-center justify-center gap-2 font-black border border-green-300"><CheckCircle2/> ALREADY REDEEMED</div>}
+                {/* BIG CHECK MARK FOR REDEEMED */}
+                {netStudent.redeemed && (
+                  <div className="mt-4 flex flex-col items-center justify-center p-6 bg-green-100 rounded-3xl border-4 border-green-400 animate-pulse">
+                    <CheckCircle2 size={80} className="text-green-600"/>
+                    <span className="text-2xl font-black text-green-700 mt-2">ALREADY REDEEMED</span>
+                  </div>
+                )}
               </div>
               {!netStudent.redeemed && (
                 <div className="space-y-4">
